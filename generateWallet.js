@@ -1,5 +1,5 @@
-const fs = require("fs");
-const { Keypair } = require("@solana/web3.js");
+import fs from "fs";
+import { Keypair } from "@solana/web3.js";
 
 // Generate a new keypair
 const wallet = Keypair.generate();
