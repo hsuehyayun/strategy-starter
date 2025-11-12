@@ -28,5 +28,4 @@ build/
 .turbo/
 coverage/
 .nyc_output/
-
 new-wallet.json
