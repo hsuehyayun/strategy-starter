@@ -24,14 +24,20 @@
 
 ## Get Started with the Starter Repo
 
-1. **Install Node dependencies**
+1. **Clone the starter repo**
 
    ```bash
-   cd /Users/glen/Desktop/strategy-starter
+   git clone https://github.com/GlenFilson/strategy-starter.git
+   cd strategy-starter
+   ```
+
+2. **Install Node dependencies**
+
+   ```bash
    npm install
    ```
 
-2. **Create or import a Solana keypair (optional)**
+3. **Create or import a Solana keypair (optional)**
 
    ```bash
    node generateWallet.js
@@ -39,7 +45,7 @@
 
    The script outputs `new-wallet.json`. Keep the secret safe—approved submissions are funded by the organisers prior to the live run. Only self-fund if you want to test privately.
 
-3. **Create your `.env` file**
+4. **Create your `.env` file**
 
    ```
    PRIVATE_KEY=[JSON array copied from new-wallet.json]
@@ -48,7 +54,7 @@
    JUPITER_API=[your Jupiter quote/execution endpoint base URL]
    ```
 
-4. **Run the reference bot**
+5. **Run the reference bot**
    ```bash
    node bot.js
    ```
