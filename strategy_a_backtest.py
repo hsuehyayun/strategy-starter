@@ -62,7 +62,7 @@ def load_data_from_csv(filepath):
     """
     df = pd.read_csv(filepath)
     df.columns = df.columns.str.lower()
-    
+
     # Handle different possible column names
     if 'timestamp' in df.columns:
         df['timestamp'] = pd.to_datetime(df['timestamp'])
@@ -672,7 +672,7 @@ def optimize_parameters(df):
     
     print(f"Completed {count} tests")
     return pd.DataFrame(results_list)
-
+# Best: SMA Short: 10, SMA Long: 50, Stop Loss: 0.05, Take Profit: 0.15
 
 # =============================================================================
 # MAIN EXECUTION
