@@ -8,14 +8,15 @@ import {
   TransactionMessage,
   TransactionInstruction,
 } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import splToken from "@solana/spl-token";
+const { getAssociatedTokenAddressSync } = splToken;
 import axios from "axios";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 // ============================================================================
-// CONFIGURATION
+// CONFIGURATION - Strategy B (SMA + RSI + Fear & Greed)
 // ============================================================================
 
 const ASSET = "SOL";
@@ -23,22 +24,39 @@ const PYTH_ID =
   "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
 
 const WS_URL = "wss://hermes.pyth.network/ws";
-const DEBUG = false; // Set to true for verbose logging
+const DEBUG = true; // Set to true for verbose logging
 
 // Candlestick settings
-const CANDLESTICK_DURATION = 1000 * 1; // 1 second
-const CANDLESTICK_INTERVAL = "1s";
+const CANDLESTICK_DURATION = 1000 * 60 * 60; // 1 hour in milliseconds
+const CANDLESTICK_INTERVAL = "1h";
 const SYMBOL = "SOLUSDT";
-const CANDLESTICK_WINDOW_SIZE = 30;
+const CANDLESTICK_WINDOW_SIZE = 100; // Keep more candles for indicators
 
-// Indicator periods
+// ============================================================================
+// STRATEGY B PARAMETERS (Optimized via backtest)
+// ============================================================================
+
+// SMA Parameters
 const SMA_SHORT_PERIOD = 10;
-const SMA_LONG_PERIOD = 30;
+const SMA_LONG_PERIOD = 50;
 
-// Trade settings
+// RSI Parameters
+const RSI_PERIOD = 14;
+const RSI_OVERSOLD = 30;      // Buy only when RSI > 30
+const RSI_OVERBOUGHT = 70;    // Buy only when RSI < 70
+const RSI_EXIT_THRESHOLD = 75; // Exit when RSI > 75
+
+// Fear & Greed Parameters
+const FG_ENTRY_MAX = 75;      // Don't buy when F&G > 75 (too greedy)
+const FG_EXIT_THRESHOLD = 80; // Exit when F&G > 80 (extreme greed)
+const FG_UPDATE_INTERVAL = 1000 * 60 * 60; // Update F&G every hour
+
+// Risk Management
+const STOP_LOSS = 0.05;       // 5% stop loss
+const TAKE_PROFIT = 0.15;     // 15% take profit
 const TRADE_PERCENTAGE = 0.1; // 10% of portfolio per trade
-const RESERVE_SOL_FOR_FEES = 0.02; // SOL reserved for transaction fees
-const SLIPPAGE_BPS = 50; // 0.5% slippage tolerance
+const RESERVE_SOL_FOR_FEES = 0.02;
+const SLIPPAGE_BPS = 50;
 const JITO_TIP_LAMPORTS = 1000;
 
 // ============================================================================
@@ -85,11 +103,7 @@ class Candle {
   }
 
   toString() {
-    return `${this.timestamp} - O: ${this.open.toFixed(
-      4
-    )} H: ${this.high.toFixed(4)} L: ${this.low.toFixed(
-      4
-    )} C: ${this.close.toFixed(4)}`;
+    return `${new Date(this.timestamp).toISOString()} - O: ${this.open.toFixed(2)} H: ${this.high.toFixed(2)} L: ${this.low.toFixed(2)} C: ${this.close.toFixed(2)}`;
   }
 }
 
@@ -102,10 +116,45 @@ const candles = [];
 const indicators = {
   smaShort: [],
   smaLong: [],
+  rsi: [],
 };
 
-// Trade execution lock to prevent multiple simultaneous trades
+// Fear & Greed state
+let fearGreedIndex = 50; // Default neutral
+let lastFGUpdate = 0;
+
+// Position tracking for stop loss / take profit
+let position = {
+  isOpen: false,
+  entryPrice: 0,
+  side: null, // 'LONG' or null
+};
+
+// Trade execution lock
 let isExecutingTrade = false;
+
+// ============================================================================
+// FEAR & GREED INDEX FETCHER
+// ============================================================================
+
+async function fetchFearGreedIndex() {
+  try {
+    const response = await axios.get("https://api.alternative.me/fng/", {
+      timeout: 10000,
+    });
+    
+    if (response.data && response.data.data && response.data.data[0]) {
+      const newFG = parseInt(response.data.data[0].value);
+      fearGreedIndex = newFG;
+      lastFGUpdate = Date.now();
+      log(`Fear & Greed Index updated: ${newFG} (${response.data.data[0].value_classification})`);
+      return newFG;
+    }
+  } catch (error) {
+    log(`Failed to fetch Fear & Greed: ${error.message}`);
+  }
+  return fearGreedIndex; // Return cached value on error
+}
 
 // ============================================================================
 // WEBSOCKET LIFECYCLE
@@ -115,24 +164,21 @@ ws.onopen = async () => {
   log("Connected to Pyth WebSocket");
   logStartupConfiguration();
 
+  // Fetch initial Fear & Greed Index
+  await fetchFearGreedIndex();
+
+  // Fetch historical candles
   const startTime = Date.now() - CANDLESTICK_DURATION * CANDLESTICK_WINDOW_SIZE;
   const endTime = Date.now();
 
-  log(
-    `Fetching historical candles for ${SYMBOL} at ${CANDLESTICK_INTERVAL} interval`
-  );
+  log(`Fetching historical candles for ${SYMBOL} at ${CANDLESTICK_INTERVAL} interval`);
 
-  await fetchHistoricalCandles(
-    startTime,
-    endTime,
-    SYMBOL,
-    CANDLESTICK_INTERVAL
-  );
+  await fetchHistoricalCandles(startTime, endTime, SYMBOL, CANDLESTICK_INTERVAL);
   log(`Fetched ${candles.length} candles`);
 
   updateIndicators();
 
-  log(`Subscribing to ${ASSET} price updates...`);
+  log(`🔔 Subscribing to ${ASSET} price updates...`);
   ws.send(
     JSON.stringify({
       type: "subscribe",
@@ -163,102 +209,198 @@ ws.onclose = () => {
 // ============================================================================
 
 async function onTick(price, timestamp) {
-  // Update candlestick with new price
+  const numericPrice = price.toNumber();
+  
+  // Update Fear & Greed periodically
+  if (Date.now() - lastFGUpdate > FG_UPDATE_INTERVAL) {
+    fetchFearGreedIndex(); // Don't await, run in background
+  }
+
+  // Check stop loss / take profit for open positions
+  if (position.isOpen) {
+    const pnlPercent = (numericPrice - position.entryPrice) / position.entryPrice;
+    
+    // Stop Loss
+    if (pnlPercent <= -STOP_LOSS) {
+      log(`STOP LOSS triggered at $${numericPrice.toFixed(2)} (${(pnlPercent * 100).toFixed(2)}%)`);
+      if (!isExecutingTrade) {
+        executeTrade({ signal: "SELL", price, reason: "STOP_LOSS" }, numericPrice);
+      }
+      return;
+    }
+    
+    // Take Profit
+    if (pnlPercent >= TAKE_PROFIT) {
+      log(`TAKE PROFIT triggered at $${numericPrice.toFixed(2)} (${(pnlPercent * 100).toFixed(2)}%)`);
+      if (!isExecutingTrade) {
+        executeTrade({ signal: "SELL", price, reason: "TAKE_PROFIT" }, numericPrice);
+      }
+      return;
+    }
+  }
+
+  // Update candlestick
   const candleClosed = updateCandles(price, timestamp);
   let signal = null;
-  // Recalculate indicators
+
   if (candleClosed) {
     updateIndicators(true);
-    debugLog("Candle closed, SMA values updated");
-    signal = generateSignal(price);
+    debugLog("🕯️ Candle closed, indicators updated");
+    signal = generateSignal(numericPrice);
   } else {
     updateIndicators(false);
   }
 
-  // Execute trade if signal exists and not already trading
+  // Execute trade if signal exists
   if (signal && !isExecutingTrade) {
-    executeTrade(signal, price.toNumber());
+    executeTrade(signal, numericPrice);
   }
 }
 
 // ============================================================================
-// INDICATOR CALCULATION
+// INDICATOR CALCULATIONS
 // ============================================================================
 
-function updateIndicators(appendSMA = false) {
+function updateIndicators(appendIndicators = false) {
   const smaShortVal = calculateSMA(candles, SMA_SHORT_PERIOD);
   const smaLongVal = calculateSMA(candles, SMA_LONG_PERIOD);
+  const rsiVal = calculateRSI(candles, RSI_PERIOD);
 
-  if (appendSMA) {
+  if (appendIndicators) {
     pushAndTrim(indicators.smaShort, smaShortVal);
     pushAndTrim(indicators.smaLong, smaLongVal);
+    pushAndTrim(indicators.rsi, rsiVal);
   }
 
   debugLog(
-    `SMA Short: ${smaShortVal?.toFixed(2) || "N/A"} | SMA Long: ${
-      smaLongVal?.toFixed(2) || "N/A"
-    }`
+    `SMA ${SMA_SHORT_PERIOD}: ${smaShortVal?.toFixed(2) || "N/A"} | ` +
+    `SMA ${SMA_LONG_PERIOD}: ${smaLongVal?.toFixed(2) || "N/A"} | ` +
+    `RSI: ${rsiVal?.toFixed(1) || "N/A"} | ` +
+    `F&G: ${fearGreedIndex}`
   );
 }
 
 function calculateSMA(candles, period) {
-  // Simple Moving Average: average of last N closing prices
   if (candles.length < period) return null;
   const relevantCandles = candles.slice(-period);
   const sum = relevantCandles.reduce((acc, candle) => acc + candle.close, 0);
   return sum / period;
 }
 
+function calculateRSI(candles, period) {
+  if (candles.length < period + 1) return null;
+  
+  const relevantCandles = candles.slice(-(period + 1));
+  let gains = 0;
+  let losses = 0;
+  
+  for (let i = 1; i < relevantCandles.length; i++) {
+    const change = relevantCandles[i].close - relevantCandles[i - 1].close;
+    if (change > 0) {
+      gains += change;
+    } else {
+      losses += Math.abs(change);
+    }
+  }
+  
+  const avgGain = gains / period;
+  const avgLoss = losses / period;
+  
+  if (avgLoss === 0) return 100;
+  
+  const rs = avgGain / avgLoss;
+  const rsi = 100 - (100 / (1 + rs));
+  
+  return rsi;
+}
+
 function pushAndTrim(array, value) {
-  // Keep array size bounded
   array.push(value);
   if (array.length > CANDLESTICK_WINDOW_SIZE) array.shift();
 }
 
 // ============================================================================
-// SIGNAL GENERATION
+// SIGNAL GENERATION - Strategy B
 // ============================================================================
 
 function generateSignal(price) {
   const lastShort = indicators.smaShort[indicators.smaShort.length - 1];
   const lastLong = indicators.smaLong[indicators.smaLong.length - 1];
+  const lastRSI = indicators.rsi[indicators.rsi.length - 1];
+  
+  const prevShort = indicators.smaShort[indicators.smaShort.length - 2];
+  const prevLong = indicators.smaLong[indicators.smaLong.length - 2];
 
-  if (lastShort == null || lastLong == null) {
+  // Need all indicators
+  if (lastShort == null || lastLong == null || lastRSI == null) {
     return null;
   }
 
-  // BUY signal: Short SMA crosses above Long SMA (bullish crossover)
-  if (lastShort > lastLong) {
-    // Check previous values to confirm crossover
-    const prevShort = indicators.smaShort[indicators.smaShort.length - 2];
-    const prevLong = indicators.smaLong[indicators.smaLong.length - 2];
-
-    if (prevShort != null && prevLong != null && prevShort <= prevLong) {
-      debugLog(`BUY signal generated at $${price.toNumber().toFixed(2)}`);
-      return { signal: "BUY", price };
+  // =========================================
+  // SELL CONDITIONS
+  // =========================================
+  
+  if (position.isOpen) {
+    // Condition 1: SMA Death Cross (Short crosses below Long)
+    if (lastShort < lastLong && prevShort != null && prevLong != null && prevShort >= prevLong) {
+      log(`SELL Signal: SMA Death Cross at $${price.toFixed(2)}`);
+      return { signal: "SELL", price, reason: "SMA_CROSS" };
+    }
+    
+    // Condition 2: RSI Overbought Exit
+    if (lastRSI > RSI_EXIT_THRESHOLD) {
+      log(`SELL Signal: RSI Overbought (${lastRSI.toFixed(1)}) at $${price.toFixed(2)}`);
+      return { signal: "SELL", price, reason: "RSI_OVERBOUGHT" };
+    }
+    
+    // Condition 3: Fear & Greed Extreme Greed Exit
+    if (fearGreedIndex > FG_EXIT_THRESHOLD) {
+      log(`SELL Signal: Extreme Greed (F&G: ${fearGreedIndex}) at $${price.toFixed(2)}`);
+      return { signal: "SELL", price, reason: "FG_EXIT" };
     }
   }
-  // SELL signal: Short SMA crosses below Long SMA (bearish crossover)
-  else if (lastShort < lastLong) {
-    // Check previous values to confirm crossover
-    const prevShort = indicators.smaShort[indicators.smaShort.length - 2];
-    const prevLong = indicators.smaLong[indicators.smaLong.length - 2];
 
-    if (prevShort != null && prevLong != null && prevShort >= prevLong) {
-      debugLog(`SELL signal generated at $${price.toNumber().toFixed(2)}`);
-      return { signal: "SELL", price };
+  // =========================================
+  // BUY CONDITIONS
+  // =========================================
+  
+  if (!position.isOpen) {
+    // Check SMA Golden Cross
+    const smaGoldenCross = lastShort > lastLong && 
+                           prevShort != null && prevLong != null && 
+                           prevShort <= prevLong;
+    
+    if (!smaGoldenCross) {
+      return null; // No golden cross, no buy signal
     }
+    
+    // Check RSI filter (not oversold and not overbought)
+    const rsiOK = lastRSI > RSI_OVERSOLD && lastRSI < RSI_OVERBOUGHT;
+    if (!rsiOK) {
+      debugLog(`BUY blocked: RSI out of range (${lastRSI.toFixed(1)})`);
+      return null;
+    }
+    
+    // Check Fear & Greed filter (not too greedy)
+    const fgOK = fearGreedIndex < FG_ENTRY_MAX;
+    if (!fgOK) {
+      debugLog(`BUY blocked: F&G too high (${fearGreedIndex})`);
+      return null;
+    }
+    
+    // All conditions met!
+    log(`BUY Signal: Golden Cross + RSI ${lastRSI.toFixed(1)} + F&G ${fearGreedIndex} at $${price.toFixed(2)}`);
+    return { signal: "BUY", price, reason: "STRATEGY_B" };
   }
 
   return null;
 }
 
 // ============================================================================
-// PRICE PARSING
+// PRICE PARSER
 // ============================================================================
 
 function parsePrice(price_feed) {
-  // Pyth returns price with exponent; multiply to get actual price
   const price = new Decimal(price_feed.price.price);
   const confidence = new Decimal(price_feed.price.conf);
   const exponent = new Decimal(price_feed.price.expo);
@@ -277,10 +419,8 @@ function updateCandles(price, timestamp) {
 
   const numericPrice = price.toNumber();
   const currentCandle = candles[candles.length - 1];
-  const currentCandleEndTimestamp =
-    currentCandle.timestamp + CANDLESTICK_DURATION;
+  const currentCandleEndTimestamp = currentCandle.timestamp + CANDLESTICK_DURATION;
 
-  // Candle period has closed; create new candle
   if (timestamp >= currentCandleEndTimestamp) {
     const newTimestamp = currentCandleEndTimestamp;
     const newCandle = new Candle(
@@ -293,15 +433,12 @@ function updateCandles(price, timestamp) {
 
     candles.push(newCandle);
 
-    // Keep only recent candles in memory
     if (candles.length > CANDLESTICK_WINDOW_SIZE) {
       candles.shift();
     }
     debugLog(`New candle created at ${new Date(newTimestamp).toISOString()}`);
     return true;
-  }
-  // Update current candle with new price
-  else {
+  } else {
     currentCandle.high = Math.max(currentCandle.high, numericPrice);
     currentCandle.low = Math.min(currentCandle.low, numericPrice);
     currentCandle.close = numericPrice;
@@ -309,13 +446,7 @@ function updateCandles(price, timestamp) {
   }
 }
 
-async function fetchHistoricalCandles(
-  startTime,
-  endTime,
-  symbol,
-  candleStickInterval
-) {
-  // Fetch historical data from Binance to initialize candlestick buffer
+async function fetchHistoricalCandles(startTime, endTime, symbol, candleStickInterval) {
   const binanceUrl = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${candleStickInterval}&startTime=${startTime}&endTime=${endTime}&limit=1000`;
 
   try {
@@ -333,15 +464,19 @@ async function fetchHistoricalCandles(
       updateIndicators(true);
     }
 
-    log("Historical candles loaded:");
-    log("Timestamp - Open - High - Low - Close");
-    for (const candle of candles) {
-      log(candle.toString());
+    log(`📊 Historical candles loaded: ${candles.length} candles`);
+    if (candles.length > 0) {
+      log(`   First: ${candles[0].toString()}`);
+      log(`   Last:  ${candles[candles.length - 1].toString()}`);
     }
   } catch (error) {
     log(`Failed to fetch historical candles: ${error.message}`);
   }
 }
+
+// ============================================================================
+// TRADE EXECUTION
+// ============================================================================
 
 async function getJupiterQuote(inputMint, outputMint, amount) {
   const quoteUrl = `https://lite-api.jup.ag/swap/v1/quote?onlyDirectRoutes=true&inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${SLIPPAGE_BPS}`;
@@ -386,10 +521,8 @@ async function executeTrade(signal, price) {
     const tradeAmount = calculateTradeAmount(signal, portfolioValue, price);
     if (tradeAmount === null) return;
 
-    const inputMint =
-      signal.signal === "BUY" ? USDC_MINT.toBase58() : SOL_MINT.toBase58();
-    const outputMint =
-      signal.signal === "BUY" ? SOL_MINT.toBase58() : USDC_MINT.toBase58();
+    const inputMint = signal.signal === "BUY" ? USDC_MINT.toBase58() : SOL_MINT.toBase58();
+    const outputMint = signal.signal === "BUY" ? SOL_MINT.toBase58() : USDC_MINT.toBase58();
 
     const quote = await getJupiterQuote(inputMint, outputMint, tradeAmount);
     if (!quote) throw new Error("No quote available");
@@ -411,9 +544,7 @@ async function executeTrade(signal, price) {
       instructions.push(createTransactionInstruction(swapData.swapInstruction));
     }
     if (swapData.cleanupInstruction) {
-      instructions.push(
-        createTransactionInstruction(swapData.cleanupInstruction)
-      );
+      instructions.push(createTransactionInstruction(swapData.cleanupInstruction));
     }
 
     if (instructions.length === 0) throw new Error("No valid instructions");
@@ -436,7 +567,19 @@ async function executeTrade(signal, price) {
     const confirmation = await connection.confirmTransaction(txid, "confirmed");
     if (confirmation.value.err) throw new Error("Transaction failed");
 
-    log(`${signal.signal} @ $${price.toFixed(2)}: ${txid}`);
+    // Update position state
+    if (signal.signal === "BUY") {
+      position.isOpen = true;
+      position.entryPrice = price;
+      position.side = "LONG";
+      log(`BUY executed @ $${price.toFixed(2)} | Reason: ${signal.reason} | TX: ${txid}`);
+    } else {
+      const pnl = position.isOpen ? ((price - position.entryPrice) / position.entryPrice * 100).toFixed(2) : "N/A";
+      position.isOpen = false;
+      position.entryPrice = 0;
+      position.side = null;
+      log(`SELL executed @ $${price.toFixed(2)} | Reason: ${signal.reason} | PnL: ${pnl}% | TX: ${txid}`);
+    }
   } catch (error) {
     log(`Trade failed: ${error}`);
   } finally {
@@ -446,10 +589,7 @@ async function executeTrade(signal, price) {
 
 async function getPortfolioValue(price) {
   try {
-    const usdcAccount = getAssociatedTokenAddressSync(
-      USDC_MINT,
-      keypair.publicKey
-    );
+    const usdcAccount = getAssociatedTokenAddressSync(USDC_MINT, keypair.publicKey);
     const solBalance = await connection.getBalance(keypair.publicKey);
     const usdcBalance = await connection.getTokenAccountBalance(usdcAccount);
 
@@ -459,6 +599,8 @@ async function getPortfolioValue(price) {
     const solInUSDC = totalSolBalance * price;
     const totalPortfolioUSDC = solInUSDC + (usdcBalance.value.uiAmount || 0);
 
+    log(`💰 Portfolio: ${totalSolBalance.toFixed(4)} SOL + ${(usdcBalance.value.uiAmount || 0).toFixed(2)} USDC = $${totalPortfolioUSDC.toFixed(2)}`);
+
     return {
       solBalance: totalSolBalance,
       usdcBalance: usdcBalance.value.uiAmount || 0,
@@ -466,24 +608,18 @@ async function getPortfolioValue(price) {
       availableSolLamports: availableSolBalance,
     };
   } catch (error) {
-    log(`Failed to fetch portfolio value: ${error.message}`);
+    log(`❌ Failed to fetch portfolio value: ${error.message}`);
     return null;
   }
 }
 
 function calculateTradeAmount(signal, portfolio, price) {
-  const tradeAmountUSDC = Math.floor(
-    portfolio.totalPortfolioUSDC * TRADE_PERCENTAGE * 1e6
-  );
+  const tradeAmountUSDC = Math.floor(portfolio.totalPortfolioUSDC * TRADE_PERCENTAGE * 1e6);
 
   if (signal.signal === "BUY") {
     const availableUSDC = portfolio.usdcBalance * 1e6;
     if (tradeAmountUSDC > availableUSDC) {
-      log(
-        `Skipped: Insufficient USDC (have ${(availableUSDC / 1e6).toFixed(
-          2
-        )} USDC, need ${(tradeAmountUSDC / 1e6).toFixed(2)} USDC)`
-      );
+      log(`⏸️ Skipped: Insufficient USDC (have ${(availableUSDC / 1e6).toFixed(2)}, need ${(tradeAmountUSDC / 1e6).toFixed(2)})`);
       return null;
     }
     return tradeAmountUSDC;
@@ -493,11 +629,7 @@ function calculateTradeAmount(signal, portfolio, price) {
     const maxSellableLamports = portfolio.availableSolLamports;
 
     if (solToSellLamports > maxSellableLamports || solToSellLamports <= 0) {
-      log(
-        `Skipped: Insufficient SOL (have ${(maxSellableLamports / 1e9).toFixed(
-          4
-        )} SOL, need ${(solToSellLamports / 1e9).toFixed(4)} SOL)`
-      );
+      log(`⏸️ Skipped: Insufficient SOL (have ${(maxSellableLamports / 1e9).toFixed(4)}, need ${(solToSellLamports / 1e9).toFixed(4)})`);
       return null;
     }
 
@@ -510,9 +642,16 @@ function calculateTradeAmount(signal, portfolio, price) {
 // ============================================================================
 
 function logStartupConfiguration() {
-  log(
-    `Bot started - SMA: ${SMA_SHORT_PERIOD}/${SMA_LONG_PERIOD} | Trade: ${
-      TRADE_PERCENTAGE * 100
-    }% | Reserve: ${RESERVE_SOL_FOR_FEES} SOL`
-  );
+  log("============================================================");
+  log("TRADING BOT - Strategy B (SMA + RSI + Fear & Greed)");
+  log("============================================================");
+  log(`Asset: ${ASSET}`);
+  log(`Candle Interval: ${CANDLESTICK_INTERVAL}`);
+  log(`SMA: ${SMA_SHORT_PERIOD} / ${SMA_LONG_PERIOD}`);
+  log(`RSI: Period ${RSI_PERIOD}, Range ${RSI_OVERSOLD}-${RSI_OVERBOUGHT}, Exit ${RSI_EXIT_THRESHOLD}`);
+  log(`F&G: Entry Max ${FG_ENTRY_MAX}, Exit ${FG_EXIT_THRESHOLD}`);
+  log(`Risk: Stop Loss ${STOP_LOSS * 100}%, Take Profit ${TAKE_PROFIT * 100}%`);
+  log(`Trade Size: ${TRADE_PERCENTAGE * 100}% of portfolio`);
+  log(`Wallet: ${keypair.publicKey.toBase58()}`);
+  log("============================================================");
 }

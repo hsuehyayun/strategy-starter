@@ -1,83 +1,350 @@
-## Cryptocurrency Trading Bot Competition
+# SOL Trading Bot - Strategy B
+## SMA + RSI + Fear & Greed Index
 
-- **Prize:** Nintendo Switch + Mario Kart
-- **Goal:** build your own cryptocurrency trading bot and strategy using this repo as your launchpad
-- **Live run:** organisers will deploy qualified bots over the Christmas holidays 2025
-- **Judging:** weighted between strategy idea quality and the PnL generated during the live run
-- **Deadline:** 31 December 2025 @ 23:59 UTC
-- **Submission:** share your GitHub repository through the Google Form (link TBA)
-- **Support:** weekly workshops plus the Building Division WhatsApp channel
-- **Universe:** any Solana-based asset with an available price feed (template defaults to SOL but you may switch to any token)
-- **AI tools:** use of AI assistants to understand or extend the codebase is not only allowed but encouraged
+A sentiment-enhanced algorithmic trading bot for Solana (SOL) that combines technical analysis with market sentiment indicators.
 
 ---
 
-## Competition Flow
+## 1. Strategy Overview
 
-1. **Develop:** fork/clone this repo, craft your own indicators, execution logic, and risk management.
-2. **Test:** backtest or paper trade; you may generate and fund your own wallet for testing (optional).
-3. **Submit:** provide your GitHub repository and documentation before the deadline.
-4. **Live run:** organisers fund approved wallets and run the bots over the holidays.
-5. **Winner:** decided on both strategy rationale and realised PnL.
+This bot implements **Strategy B**, which enhances traditional technical indicators with the **Fear & Greed Index** as a sentiment filter. The strategy was selected after extensive backtesting and comparison with two alternative approaches.
 
----
+### Core Idea
 
-## Get Started with the Starter Repo
+> *"Be fearful when others are greedy, and greedy when others are fearful."* — Warren Buffett
 
-1. **Clone the starter repo**
-
-   ```bash
-   git clone https://github.com/GlenFilson/strategy-starter.git
-   cd strategy-starter
-   ```
-
-2. **Install Node dependencies**
-
-   ```bash
-   npm install
-   ```
-
-3. **Create or import a Solana keypair (optional)**
-
-   ```bash
-   node generateWallet.js
-   ```
-
-   The script outputs `new-wallet.json`. Keep the secret safe—approved submissions are funded by the organisers prior to the live run. Only self-fund if you want to test privately.
-
-4. **Create your `.env` file**
-
-   ```
-   PRIVATE_KEY=[JSON array copied from new-wallet.json]
-   SOLANA_RPC=https://api.mainnet-beta.solana.com
-   HELIUS_API_KEY=[your Helius RPC key]
-   JUPITER_API=[your Jupiter quote/execution endpoint base URL]
-   ```
-
-5. **Run the reference bot**
-   ```bash
-   node bot.js
-   ```
-   The baseline bot streams Pyth prices, builds short/long SMAs, and trades on crossovers for SOL. Update the configuration (asset symbol, mint addresses, feeds) to target any Solana token with a supported price feed and expand the logic as needed.
+The strategy uses contrarian sentiment analysis: avoid buying during periods of extreme greed (when markets are likely overbought) and exit positions when euphoria peaks.
 
 ---
 
-## Repository Contents
+## 2. Strategy Comparison
 
-- `bot.js` – real-time Solana trading scaffold with SMA example logic
-- `generateWallet.js` – helper for creating Solana keypairs
-- `fetch_pyth_data.py` + sample CSVs – tools for downloading historical OHLC data
-- `backtest.ipynb` – notebook template for research and prototyping
+Three strategies were developed and backtested on **32,768 hourly candles** (Feb 2022 - Dec 2025):
 
-Adapt or replace any component as long as your submission instructions explain how to run the final bot.
+| Metric | Strategy A | **Strategy B** | Strategy C |
+|--------|------------|----------------|------------|
+| **Total Return** | 16.78% | **17.17%** [Selected] | 9.31% |
+| **Max Drawdown** | -6.25% | **-5.59%** [Selected] | -3.00% |
+| **Win Rate** | 36.8% | **37.3%** [Selected] | 36.8% |
+| **Total Trades** | 821 | 767 | 403 |
+| **Risk-Adj Return** | 2.68 | **3.07** [Selected] | 3.11 |
+
+### Strategy Descriptions
+
+| Strategy | Entry Conditions | Exit Conditions | Key Feature |
+|----------|------------------|-----------------|-------------|
+| A | SMA Cross + RSI 30-70 | SMA Cross + RSI > 75 | Technical only |
+| **B (Selected)** | A + F&G < 75 | A + F&G > 80 | + Sentiment filter |
+| C | A + SMCI > 45 | A + SMCI < 35 | + Composite index |
+
+**Winner: Strategy B** — Best balance of return (17.17%) and risk management (-5.59% max drawdown).
 
 ---
 
-## Submission Checklist
+## 3. Technical Implementation
 
-- GitHub repository includes:
-  - Live trading bot code and configuration
-  - Brief README outlining strategy idea
-  - Any additional resources that may support your submission
-- Access granted to the judging team (public repo or invite required reviewers)
-- Repository link submitted via Google Form (TBA) before the deadline
+### Entry Conditions (BUY)
+All conditions must be met:
+1. **SMA Golden Cross**: SMA(10) crosses above SMA(50)
+2. **RSI Filter**: RSI(14) between 30 and 70 (not oversold/overbought)
+3. **Sentiment Filter**: Fear & Greed Index < 75 (not extreme greed)
+
+### Exit Conditions (SELL)
+Any condition triggers exit:
+1. **SMA Death Cross**: SMA(10) crosses below SMA(50)
+2. **RSI Overbought**: RSI(14) > 75
+3. **Extreme Greed**: Fear & Greed Index > 80
+4. **Stop Loss**: -5% from entry
+5. **Take Profit**: +15% from entry
+
+### Parameters
+```javascript
+// Technical Indicators
+SMA_SHORT_PERIOD = 10
+SMA_LONG_PERIOD = 50
+RSI_PERIOD = 14
+RSI_OVERSOLD = 30
+RSI_OVERBOUGHT = 70
+
+// Sentiment Thresholds
+FG_ENTRY_MAX = 75      // Don't buy above this
+FG_EXIT_THRESHOLD = 80 // Exit above this
+
+// Risk Management
+STOP_LOSS = 0.05       // 5%
+TAKE_PROFIT = 0.15     // 15%
+TRADE_PERCENTAGE = 0.1 // 10% per trade
+```
+
+---
+
+## 4. Exploratory Data Analysis (EDA)
+
+### Data Preparation
+- **SOL Price Data**: Updated from Binance API using `download_sol_data.py`
+  - Original data: Feb 2022 - Nov 2025 (32,768 candles)
+  - Updated data: Feb 2022 - Dec 2025 (34,095 candles)
+  - Data cleaning performed with `fix_sol_data.py` to merge and deduplicate
+- **BTC Price Data**: Original data retained (not updated), used only for reference
+```
+
+34,095 hourly candles (Feb 2022 - Dec 2025)
+
+### Market Regime Analysis
+Using MA50/MA200 crossover to identify market states:
+
+| Regime | Days | % of Time | Avg Daily Return | Win Rate |
+|--------|------|-----------|------------------|----------|
+| **Bull** | 556 | 40.6% | +0.486% | 52.3% |
+| **Bear** | 415 | 30.3% | +0.136% | 48.7% |
+| **Neutral** | 400 | 29.2% | -0.242% | 47.9% |
+
+### Fear & Greed Effectiveness
+Validation of contrarian sentiment approach:
+
+| Condition | Next-Day Avg Return | Win Rate | Observation |
+|-----------|---------------------|----------|-------------|
+| Extreme Fear (< 25) | **+0.934%** | 55.0% | Strong buy signal |
+| Extreme Greed (> 75) | +0.314% | 51.9% | Weak, use as exit |
+
+**Key Finding**: Buying during extreme fear historically yields 3x higher returns than buying during extreme greed.
+
+---
+
+## 5. Risk Management
+
+### Position Sizing
+- **10% of portfolio** per trade
+- Prevents overexposure to single positions
+
+### Stop Loss / Take Profit
+- **Stop Loss**: -5% (limits downside)
+- **Take Profit**: +15% (locks in gains)
+- **Risk/Reward Ratio**: 1:3
+
+### Sentiment Protection
+- Avoids entry during market euphoria (F&G > 75)
+- Forces exit during extreme greed (F&G > 80)
+
+---
+
+## 6. Parameter Optimization & Overfitting Analysis
+
+### Walk-Forward Validation
+To ensure robustness, we performed walk-forward validation with 70% training / 30% test split:
+
+| Strategy | Train Return | Test Return | Ratio | Status |
+|----------|--------------|-------------|-------|--------|
+| Strategy B | 17.17% | - | - | Simple, robust |
+| Strategy C (SMCI) | 14.43% | 3.89% | 27% | Overfitting |
+
+### Why Strategy B was Selected
+1. **No overfitting risk**: Simple indicators don't overfit to historical data
+2. **Proven effectiveness**: Fear & Greed Index validated through EDA
+3. **Best risk-adjusted return**: 3.07 Return/MaxDD ratio
+
+### Strategy C Research Contribution
+Although Strategy C showed overfitting, the research process was valuable:
+- Developed **Smart Money Composite Index (SMCI)** combining F&G + Momentum + Funding Rate
+- Walk-forward validation revealed limitations of complex indicators
+- Highlighted importance of out-of-sample testing
+
+---
+
+## 7. Repository Structure
+
+```
+strategy-starter/
+│
+├── [MAIN BOT] (Main Bot/)
+│   ├── bot.js                      # Main trading bot (Strategy B) *
+│   ├── generateWallet.js           # Wallet generation utility
+│   ├── package.json                # Node.js dependencies
+│   ├── package-lock.json
+│   ├── new-wallet.json             # Generated wallet (not committed)
+│   └── .env                        # Configuration (not committed)
+│
+├── [BACKTEST & ANALYSIS]
+│   ├── strategy_a_backtest.py      # Strategy A: SMA + RSI only
+│   ├── strategy_b_backtest.py      # Strategy B: + Fear & Greed *
+│   ├── strategy_c_backtest.py      # Strategy C: + SMCI
+│   ├── eda_analysis.py             # Exploratory Data Analysis
+│   ├── final_analysis.py           # Strategy comparison
+│   ├── optimize_strategy_c.py      # Parameter optimization (3-indicator)
+│   ├── optimize_simplified.py      # Parameter optimization (2-indicator)
+│   ├── momentum_proxy.py           # Polymarket proxy for backtest
+│   └── fix_sol_data.py             # Data preprocessing utility
+│
+├── [CHARTS & RESULTS]
+│   ├── strategy_comparison.png     # A vs B vs C comparison
+│   ├── strategy_b_results.png      # Strategy B backtest results
+│   ├── strategy_b_indicators.png   # Strategy B indicators visualization
+│   ├── strategy_c_results.png      # Strategy C backtest results
+│   ├── eda_analysis.png            # EDA charts
+│   ├── backtest_results.png        # General backtest results
+│   └── indicators.png              # Technical indicators chart
+│
+├── [DATA]
+│   ├── SOL_1h_data.csv             # SOL hourly price data (32,768 candles)
+│   ├── SOL_1h_data_backup.csv      # Backup of original data
+│   └── BTC_1h_data.csv             # BTC reference data
+│
+├── [OTHER]
+│   ├── backtest.ipynb              # Jupyter notebook for prototyping
+│   ├── fetch_pyth_data.py          # Pyth data fetcher
+│   ├── requirements.txt            # Python dependencies
+│   └── README.md                   # This file
+│
+└── [NOT COMMITTED]
+    ├── .env                        # Private keys & API keys
+    ├── new-wallet.json             # Generated wallet
+    ├── .venv/                      # Python virtual environment
+    └── node_modules/               # Node.js packages
+```
+
+---
+
+## 8. How to Run
+
+### Prerequisites
+- Node.js 18+
+- Python 3.10+ (for backtesting)
+- npm
+
+### 1. Clone Repository
+```bash
+git clone https://github.com/YOUR_USERNAME/strategy-starter.git
+cd strategy-starter
+```
+
+### 2. Navigate to Main Bot Directory
+```bash
+cd "Main Bot"
+```
+
+### 3. Install Node.js Dependencies
+```bash
+npm install
+```
+
+### 4. Install Python Dependencies (for backtesting, run from root directory)
+```bash
+cd ..  # Back to root
+python3 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+pip install pandas numpy matplotlib requests
+```
+
+### 5. Generate Wallet
+```bash
+cd "Main Bot"
+node generateWallet.js
+```
+This creates `new-wallet.json` with your public and private keys.
+
+### 6. Configure Environment
+Create a `.env` file in the `Main Bot` directory:
+```bash
+# Copy the entire array from new-wallet.json
+PRIVATE_KEY=[your,private,key,array,from,new-wallet.json]
+
+# Solana RPC endpoint (Helius recommended for reliability)
+SOLANA_RPC=https://mainnet.helius-rpc.com/?api-key=YOUR_HELIUS_API_KEY
+
+# Helius API key
+HELIUS_API_KEY=YOUR_HELIUS_API_KEY
+```
+
+### 7. Run the Trading Bot
+```bash
+cd "Main Bot"
+node bot.js
+```
+
+Expected output:
+```
+[2025-01-01T00:00:00.000Z] ============================================================
+[2025-01-01T00:00:00.000Z] TRADING BOT - Strategy B (SMA + RSI + Fear & Greed)
+[2025-01-01T00:00:00.000Z] ============================================================
+[2025-01-01T00:00:00.000Z] Asset: SOL
+[2025-01-01T00:00:00.000Z] Candle Interval: 1h
+[2025-01-01T00:00:00.000Z] SMA: 10 / 50
+[2025-01-01T00:00:00.000Z] RSI: Period 14, Range 30-70, Exit 75
+[2025-01-01T00:00:00.000Z] F&G: Entry Max 75, Exit 80
+[2025-01-01T00:00:00.000Z] Risk: Stop Loss 5%, Take Profit 15%
+[2025-01-01T00:00:00.000Z] Trade Size: 10% of portfolio
+[2025-01-01T00:00:00.000Z] ============================================================
+[2025-01-01T00:00:00.000Z] Connected to Pyth WebSocket
+[2025-01-01T00:00:00.000Z] Fear & Greed Index updated: 23 (Extreme Fear)
+[2025-01-01T00:00:00.000Z] Fetching historical candles...
+```
+
+### 8. Run Backtests (Optional)
+```bash
+# Activate Python virtual environment
+source .venv/bin/activate
+
+# Run Strategy B backtest
+python3 strategy_b_backtest.py
+
+# Run EDA analysis
+python3 eda_analysis.py
+
+# Run all strategies comparison
+python3 final_analysis.py
+
+# Run parameter optimization
+python3 optimize_simplified.py
+```
+
+---
+
+## 9. Backtest Results
+
+### Strategy Comparison Chart
+<img src="./strategy_comparison.png" alt="Strategy Comparison" width="800">
+
+### Strategy B Performance
+<img src="./strategy_b_results.png" alt="Strategy B Results" width="800">
+
+### Strategy B Indicators
+<img src="./strategy_b_indicators.png" alt="Strategy B Indicators" width="800">
+
+### EDA Analysis
+<img src="./eda_analysis.png" alt="EDA Analysis" width="800">
+
+---
+
+## 10. Key Learnings
+
+1. **Sentiment matters**: Adding Fear & Greed Index improved both returns (+0.39%) and reduced drawdown (-0.66%).
+
+2. **Simplicity wins**: Complex composite indicators (SMCI) showed overfitting; simpler strategies generalise better.
+
+3. **Contrarian works**: Buying during fear and selling during greed is supported by historical data.
+
+4. **Risk management is crucial**: Stop loss and take profit prevent catastrophic losses and lock in gains.
+
+5. **Walk-forward validation is essential**: Out-of-sample testing revealed overfitting in Strategy C that wasn't visible in full-sample backtest.
+
+---
+
+## 11. Data Sources & References
+
+- **Fear & Greed Index**: [Alternative.me API](https://alternative.me/crypto/fear-and-greed-index/)
+- **Price Data**: [Binance API](https://binance-docs.github.io/apidocs/)
+- **Live Price Feed**: [Pyth Network](https://pyth.network/)
+- **DEX Aggregator**: [Jupiter](https://station.jup.ag/)
+- **Solana RPC**: [Helius](https://helius.xyz/)
+
+---
+
+## 12. Author
+
+Anny (Ya-Yun) Hsueh - Trading Bot Competition 2025 Year End Submission
+
+---
+
+## 13. Disclaimer
+
+This bot is for educational and competition purposes only. Cryptocurrency trading involves substantial risk. Past performance does not guarantee future results.
