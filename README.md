@@ -19,7 +19,7 @@ The strategy uses contrarian sentiment analysis: avoid buying during periods of 
 
 ## 2. Strategy Comparison
 
-Three strategies were developed and backtested on **32,768 hourly candles** (Feb 2022 - Dec 2025):
+Three strategies were developed and backtested on **34,095 hourly candles** (Feb 2022 - Dec 2025):
 
 | Metric | Strategy A | **Strategy B** | Strategy C |
 |--------|------------|----------------|------------|
@@ -86,9 +86,6 @@ TRADE_PERCENTAGE = 0.1 // 10% per trade
   - Updated data: Feb 2022 - Dec 2025 (34,095 candles)
   - Data cleaning performed with `fix_sol_data.py` to merge and deduplicate
 - **BTC Price Data**: Original data retained (not updated), used only for reference
-```
-
-34,095 hourly candles (Feb 2022 - Dec 2025)
 
 ### Market Regime Analysis
 Using MA50/MA200 crossover to identify market states:
@@ -155,51 +152,39 @@ Although Strategy C showed overfitting, the research process was valuable:
 
 ```
 strategy-starter/
+├── Main_Bot/
+│   ├── bot.js                 # Main trading bot (Strategy B)
+│   ├── generateWallet.js      # Wallet generation utility
+│   ├── package.json           # Node.js dependencies
+│   └── .env                   # Configuration (not committed)
 │
-├── [MAIN BOT] (Main Bot/)
-│   ├── bot.js                      # Main trading bot (Strategy B) *
-│   ├── generateWallet.js           # Wallet generation utility
-│   ├── package.json                # Node.js dependencies
-│   ├── package-lock.json
-│   ├── new-wallet.json             # Generated wallet (not committed)
-│   └── .env                        # Configuration (not committed)
+├── Backtest_Analysis/
+│   ├── strategy_a_backtest.py
+│   ├── strategy_b_backtest.py
+│   ├── strategy_c_backtest.py
+│   ├── eda_analysis.py
+│   ├── final_analysis.py
+│   ├── optimize_strategy_c.py
+│   ├── optimize_simplified.py
+│   └── momentum_proxy.py
 │
-├── [BACKTEST & ANALYSIS]
-│   ├── strategy_a_backtest.py      # Strategy A: SMA + RSI only
-│   ├── strategy_b_backtest.py      # Strategy B: + Fear & Greed *
-│   ├── strategy_c_backtest.py      # Strategy C: + SMCI
-│   ├── eda_analysis.py             # Exploratory Data Analysis
-│   ├── final_analysis.py           # Strategy comparison
-│   ├── optimize_strategy_c.py      # Parameter optimization (3-indicator)
-│   ├── optimize_simplified.py      # Parameter optimization (2-indicator)
-│   ├── momentum_proxy.py           # Polymarket proxy for backtest
-│   └── fix_sol_data.py             # Data preprocessing utility
+├── Charts_Results/
+│   ├── strategy_comparison.png
+│   ├── strategy_b_results.png
+│   ├── strategy_b_indicators.png
+│   ├── eda_analysis.png
+│   └── backtest_results.png
 │
-├── [CHARTS & RESULTS]
-│   ├── strategy_comparison.png     # A vs B vs C comparison
-│   ├── strategy_b_results.png      # Strategy B backtest results
-│   ├── strategy_b_indicators.png   # Strategy B indicators visualization
-│   ├── strategy_c_results.png      # Strategy C backtest results
-│   ├── eda_analysis.png            # EDA charts
-│   ├── backtest_results.png        # General backtest results
-│   └── indicators.png              # Technical indicators chart
+├── Data/
+│   ├── SOL_1h_data.csv
+│   └── BTC_1h_data.csv
 │
-├── [DATA]
-│   ├── SOL_1h_data.csv             # SOL hourly price data (32,768 candles)
-│   ├── SOL_1h_data_backup.csv      # Backup of original data
-│   └── BTC_1h_data.csv             # BTC reference data
+├── Others/
+│   ├── backtest.ipynb
+│   ├── fetch_pyth_data.py
+│   └── requirements.txt
 │
-├── [OTHER]
-│   ├── backtest.ipynb              # Jupyter notebook for prototyping
-│   ├── fetch_pyth_data.py          # Pyth data fetcher
-│   ├── requirements.txt            # Python dependencies
-│   └── README.md                   # This file
-│
-└── [NOT COMMITTED]
-    ├── .env                        # Private keys & API keys
-    ├── new-wallet.json             # Generated wallet
-    ├── .venv/                      # Python virtual environment
-    └── node_modules/               # Node.js packages
+└── README.md
 ```
 
 ---
@@ -213,13 +198,13 @@ strategy-starter/
 
 ### 1. Clone Repository
 ```bash
-git clone https://github.com/YOUR_USERNAME/strategy-starter.git
+git clone https://github.com/GlenFilson/strategy-starter.git
 cd strategy-starter
 ```
 
 ### 2. Navigate to Main Bot Directory
 ```bash
-cd "Main Bot"
+cd Main_Bot
 ```
 
 ### 3. Install Node.js Dependencies
@@ -229,35 +214,39 @@ npm install
 
 ### 4. Install Python Dependencies (for backtesting, run from root directory)
 ```bash
-cd ..  # Back to root
+cd ..
 python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install pandas numpy matplotlib requests
 ```
 
 ### 5. Generate Wallet
 ```bash
-cd "Main Bot"
+cd Main_Bot
 node generateWallet.js
 ```
-This creates `new-wallet.json` with your public and private keys.
+This creates `new-wallet.json` containing your public key (wallet address) and private key (secret key array).
+
+**Important**: Save your public key - you will need to submit it for the competition.
 
 ### 6. Configure Environment
-Create a `.env` file in the `Main Bot` directory:
+Create a `.env` file in the `Main_Bot` directory:
 ```bash
-# Copy the entire array from new-wallet.json
+# Copy the entire array from new-wallet.json (keep the square brackets)
 PRIVATE_KEY=[your,private,key,array,from,new-wallet.json]
 
-# Solana RPC endpoint (Helius recommended for reliability)
-SOLANA_RPC=https://mainnet.helius-rpc.com/?api-key=YOUR_HELIUS_API_KEY
+# Solana RPC endpoint - get your free API key from https://helius.xyz/
+SOLANA_RPC=https://mainnet.helius-rpc.com/?api-key=<your-helius-api-key>
 
-# Helius API key
-HELIUS_API_KEY=YOUR_HELIUS_API_KEY
+# Helius API key (same as above)
+HELIUS_API_KEY=<your-helius-api-key>
 ```
+
+**Note**: Never commit `.env` or `new-wallet.json` to GitHub. These files are already in `.gitignore`.
 
 ### 7. Run the Trading Bot
 ```bash
-cd "Main Bot"
+cd Main_Bot
 node bot.js
 ```
 
@@ -275,25 +264,18 @@ Expected output:
 [2025-01-01T00:00:00.000Z] Trade Size: 10% of portfolio
 [2025-01-01T00:00:00.000Z] ============================================================
 [2025-01-01T00:00:00.000Z] Connected to Pyth WebSocket
-[2025-01-01T00:00:00.000Z] Fear & Greed Index updated: 23 (Extreme Fear)
+[2025-01-01T00:00:00.000Z] Fear & Greed Index updated: 21 (Extreme Fear)
 [2025-01-01T00:00:00.000Z] Fetching historical candles...
 ```
 
 ### 8. Run Backtests (Optional)
 ```bash
-# Activate Python virtual environment
-source .venv/bin/activate
+cd Backtest_Analysis
+source ../.venv/bin/activate
 
-# Run Strategy B backtest
 python3 strategy_b_backtest.py
-
-# Run EDA analysis
 python3 eda_analysis.py
-
-# Run all strategies comparison
 python3 final_analysis.py
-
-# Run parameter optimization
 python3 optimize_simplified.py
 ```
 
@@ -302,16 +284,16 @@ python3 optimize_simplified.py
 ## 9. Backtest Results
 
 ### Strategy Comparison Chart
-<img src="./strategy_comparison.png" alt="Strategy Comparison" width="800">
+![Strategy Comparison](./Charts_Results/strategy_comparison.png)
 
 ### Strategy B Performance
-<img src="./strategy_b_results.png" alt="Strategy B Results" width="800">
+![Strategy B Results](./Charts_Results/strategy_b_results.png)
 
 ### Strategy B Indicators
-<img src="./strategy_b_indicators.png" alt="Strategy B Indicators" width="800">
+![Strategy B Indicators](./Charts_Results/strategy_b_indicators.png)
 
 ### EDA Analysis
-<img src="./eda_analysis.png" alt="EDA Analysis" width="800">
+![EDA Analysis](./Charts_Results/eda_analysis.png)
 
 ---
 
@@ -331,6 +313,14 @@ python3 optimize_simplified.py
 
 ## 11. Data Sources & References
 
+### Data Preparation
+- **SOL Price Data**: Updated from Binance API using `download_sol_data.py`
+  - Original data: Feb 2022 - Nov 2025 (32,768 candles)
+  - Updated data: Feb 2022 - Dec 2025 (34,095 candles)
+  - Data cleaning performed with `fix_sol_data.py` to merge and deduplicate
+- **BTC Price Data**: Original data retained (not updated), used only for reference
+
+### External APIs
 - **Fear & Greed Index**: [Alternative.me API](https://alternative.me/crypto/fear-and-greed-index/)
 - **Price Data**: [Binance API](https://binance-docs.github.io/apidocs/)
 - **Live Price Feed**: [Pyth Network](https://pyth.network/)
